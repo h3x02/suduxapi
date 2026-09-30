@@ -2,7 +2,7 @@ package websocket
 
 import (
 	"encoding/json"
-	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -15,14 +15,6 @@ const (
 	maxMessageSize = 4096
 )
 
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	CheckOrigin: func(r *http.Request) bool {
-		return true // Mobile app origin check
-	},
-}
-
 type MessageEnvelope struct {
 	Type      string          `json:"type"`
 	RequestID string          `json:"request_id,omitempty"`
@@ -32,9 +24,27 @@ type MessageEnvelope struct {
 type ClientSession struct {
 	PlayerID string
 	MatchID  string
-	conn     *websocket.Conn
-	send     chan []byte
-	hub      *Hub
+	// superseded marks a session replaced by a newer connection from the same
+	// player. trySend drops messages for superseded sessions instead of
+	// closing the channel — closing would panic when readPump races a
+	// sendError into the same channel.
+	superseded atomic.Bool
+	conn       *websocket.Conn
+	send       chan []byte
+	hub        *Hub
+}
+
+// trySend delivers a message without ever blocking or panicking on a closed
+// channel. Non-blocking sends are intentional: a slow client must not stall
+// move processing or broadcasts for everyone else.
+func (s *ClientSession) trySend(msg []byte) {
+	if s.superseded.Load() {
+		return
+	}
+	select {
+	case s.send <- msg:
+	default:
+	}
 }
 
 func (s *ClientSession) readPump() {
@@ -110,5 +120,5 @@ func (s *ClientSession) sendError(reqID, code, msg string) {
 		},
 	}
 	bytes, _ := json.Marshal(resp)
-	s.send <- bytes
+	s.trySend(bytes)
 }

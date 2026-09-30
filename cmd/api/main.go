@@ -2,7 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
@@ -22,17 +27,24 @@ import (
 
 func main() {
 	cfg := config.Load()
+	// Init logging BEFORE validation: logging a config error through a nil
+	// logger used to panic with a segfault instead of printing the problem.
 	logger.Init(cfg.AppEnv)
+	if err := cfg.Validate(); err != nil {
+		logger.Log.Error("invalid configuration", "err", err)
+		os.Exit(1)
+	}
 
 	logger.Log.Info("Starting Sudux REST API server", "port", cfg.AppPort, "env", cfg.AppEnv)
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	// 1. Connect Postgres & run migrations
 	db, err := postgres.Connect(ctx, cfg.DatabaseURL)
 	if err != nil {
 		logger.Log.Error("failed to connect to postgres", "err", err)
-		return
+		os.Exit(1)
 	}
 	defer db.Close()
 
@@ -44,7 +56,7 @@ func main() {
 	rdb, err := redis.Connect(ctx, cfg.RedisURL)
 	if err != nil {
 		logger.Log.Error("failed to connect to redis", "err", err)
-		return
+		os.Exit(1)
 	}
 
 	// 3. Email sender setup
@@ -62,7 +74,7 @@ func main() {
 	statsRepo := stats.NewRepository(db)
 
 	authSvc := auth.NewService(cfg, playerRepo, rdb, emailSender)
-	matchmakingSvc := matchmaking.NewService(rdb, matchRepo)
+	matchmakingSvc := matchmaking.NewService(rdb, matchRepo, cfg)
 
 	// Handlers
 	authHandler := auth.NewHandler(authSvc, playerRepo)
@@ -75,6 +87,7 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(chiMiddleware.Logger)
 	r.Use(chiMiddleware.Recoverer)
+	r.Use(chiMiddleware.Timeout(30 * time.Second))
 
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -112,8 +125,27 @@ func main() {
 		r.Get("/stats", statsHandler.GetMyStats)
 	})
 
-	logger.Log.Info("Listening on http://localhost:" + cfg.AppPort)
-	if err := http.ListenAndServe(":"+cfg.AppPort, r); err != nil {
-		logger.Log.Error("Server failed to start", "err", err)
+	srv := &http.Server{
+		Addr:         ":" + cfg.AppPort,
+		Handler:      r,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 15 * time.Second,
+	}
+
+	go func() {
+		logger.Log.Info("Listening on http://localhost:" + cfg.AppPort)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Log.Error("Server failed to start", "err", err)
+			os.Exit(1)
+		}
+	}()
+
+	<-ctx.Done()
+	logger.Log.Info("Shutting down API server...")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.Log.Error("graceful shutdown", "err", err)
 	}
 }

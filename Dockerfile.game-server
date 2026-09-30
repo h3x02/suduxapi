@@ -1,0 +1,33 @@
+# Sudux game server (WebSocket /ws).
+# Long-lived connections: ReadTimeout/WriteTimeout are managed in-app.
+
+FROM golang:1.26-alpine AS builder
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath \
+    -buildvcs=false \
+    -ldflags="-s -w" \
+    -o /out/game-server ./cmd/game-server
+
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates \
+    && addgroup -S app \
+    && adduser -S -G app app
+
+WORKDIR /app
+
+COPY --from=builder /out/game-server /usr/local/bin/game-server
+
+USER app
+
+EXPOSE 8081
+
+ENTRYPOINT ["/usr/local/bin/game-server"]

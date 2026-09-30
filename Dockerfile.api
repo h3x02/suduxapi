@@ -1,0 +1,42 @@
+# Sudux REST API server.
+# Multi-stage build: Go toolchain only exists in the builder stage; the runtime
+# image is a minimal Alpine with CA certificates and a non-root user.
+#
+# NOTE: the API runs SQL migrations at startup from the relative path
+# "migrations" (cmd/api/main.go -> postgres.RunMigrations), so the migrations
+# directory MUST be copied into the working directory of the runtime image.
+
+FROM golang:1.26-alpine AS builder
+
+WORKDIR /src
+
+# Cache dependency download as its own layer.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath \
+    -buildvcs=false \
+    -ldflags="-s -w" \
+    -o /out/api ./cmd/api
+
+FROM alpine:3.20
+
+# ca-certificates: required for HTTPS calls to the Resend API.
+# No shell tools beyond busybox, no build tooling in the runtime image.
+RUN apk add --no-cache ca-certificates \
+    && addgroup -S app \
+    && adduser -S -G app app
+
+WORKDIR /app
+
+COPY --from=builder /out/api /usr/local/bin/api
+COPY --from=builder /src/migrations /app/migrations
+
+USER app
+
+EXPOSE 8080
+
+ENTRYPOINT ["/usr/local/bin/api"]

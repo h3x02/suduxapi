@@ -2,6 +2,7 @@ package matchmaking
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/h3x02/suduxapi/internal/middleware"
@@ -41,7 +42,15 @@ func (h *Handler) JoinQueue(w http.ResponseWriter, r *http.Request) {
 
 	event, err := h.svc.JoinQueue(r.Context(), &req)
 	if err != nil {
-		respondError(w, http.StatusBadRequest, "MATCHMAKING_FAILED", err.Error())
+		switch {
+		case errors.Is(err, ErrPlayerAlreadyInMatch):
+			respondError(w, http.StatusConflict, "ALREADY_IN_MATCH", err.Error())
+		case errors.Is(err, ErrPlayerAlreadyInQueue):
+			respondError(w, http.StatusConflict, "ALREADY_IN_QUEUE", err.Error())
+		default:
+			// Covers enum validation errors and transient failures.
+			respondError(w, http.StatusBadRequest, "MATCHMAKING_FAILED", err.Error())
+		}
 		return
 	}
 
@@ -88,7 +97,7 @@ func (h *Handler) GetStatus(w http.ResponseWriter, r *http.Request) {
 
 	hasMatch, matchID, err := h.svc.HasActiveMatch(r.Context(), playerIDStr)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "DB_ERROR", err.Error())
+		respondError(w, http.StatusInternalServerError, "DB_ERROR", "Failed to check match status")
 		return
 	}
 

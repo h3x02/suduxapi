@@ -73,6 +73,29 @@ func (r *Repository) SaveRefreshToken(ctx context.Context, playerID uuid.UUID, t
 	return err
 }
 
+// RotateRefreshToken atomically revokes the token identified by jti+hash only
+// if it is still valid (not revoked, not expired). It returns true when the
+// calling request won the rotation; false means unknown, already-rotated
+// (reuse), or expired token. This closes the validate-then-revoke race where
+// two concurrent refreshes could both succeed.
+func (r *Repository) RotateRefreshToken(ctx context.Context, jti, tokenHash string) (bool, error) {
+	tag, err := r.db.Pool.Exec(ctx,
+		`UPDATE refresh_tokens SET revoked = TRUE
+		 WHERE jti = $1 AND token_hash = $2 AND revoked = FALSE AND expires_at > CURRENT_TIMESTAMP`,
+		jti, tokenHash,
+	)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// RevokeAllPlayerRefreshTokens is the kill-switch for detected token reuse.
+func (r *Repository) RevokeAllPlayerRefreshTokens(ctx context.Context, playerID uuid.UUID) error {
+	_, err := r.db.Pool.Exec(ctx, `UPDATE refresh_tokens SET revoked = TRUE WHERE player_id = $1`, playerID)
+	return err
+}
+
 func (r *Repository) RevokeRefreshTokenByJTI(ctx context.Context, jti string) error {
 	query := `UPDATE refresh_tokens SET revoked = TRUE WHERE jti = $1`
 	_, err := r.db.Pool.Exec(ctx, query, jti)

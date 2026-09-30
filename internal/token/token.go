@@ -15,6 +15,7 @@ import (
 
 var (
 	ErrInvalidToken = errors.New("invalid or expired token")
+	ErrExpiredToken = errors.New("token has expired")
 	ErrWrongType    = errors.New("invalid token type")
 )
 
@@ -101,7 +102,13 @@ func ParseAndValidateToken(tokenStr, secret, expectedType string) (*Claims, erro
 		return []byte(secret), nil
 	})
 
-	if err != nil || !token.Valid {
+	if err != nil {
+		if errors.Is(err, jwt.ErrTokenExpired) {
+			return nil, ErrExpiredToken
+		}
+		return nil, ErrInvalidToken
+	}
+	if !token.Valid {
 		return nil, ErrInvalidToken
 	}
 

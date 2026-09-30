@@ -24,15 +24,17 @@ func TestPuzzleGenerator(t *testing.T) {
 		}
 	}
 
-	// Check clue count
+	// Check clue count: uniqueness enforcement can block individual removals,
+	// so the final count is at least the difficulty target (easy = 42), never
+	// fewer. Exact uniqueness is asserted in TestPuzzleSolutionsAreUnique.
 	clueCount := 0
 	for _, val := range p.Board {
 		if val != 0 {
 			clueCount++
 		}
 	}
-	if clueCount != 42 {
-		t.Fatalf("expected 42 clues for easy difficulty, got %d", clueCount)
+	if clueCount < 42 {
+		t.Fatalf("expected at least 42 clues for easy difficulty, got %d", clueCount)
 	}
 }
 

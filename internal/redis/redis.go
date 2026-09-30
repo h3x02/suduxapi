@@ -11,6 +11,12 @@ type Client struct {
 	*redis.Client
 }
 
+// Typed exposes the underlying go-redis client for packages that depend on
+// go-redis types directly (e.g. the game room lock release).
+func (c *Client) Typed() *redis.Client {
+	return c.Client
+}
+
 func Connect(ctx context.Context, redisURL string) (*Client, error) {
 	opts, err := redis.ParseURL(redisURL)
 	if err != nil {

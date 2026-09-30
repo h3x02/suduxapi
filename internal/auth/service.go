@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -144,6 +145,11 @@ func (s *Service) VerifyCode(ctx context.Context, reqEmail, code string) (*token
 	return tokenPair, p, nil
 }
 
+// Refresh rotates the refresh token atomically and detects token reuse.
+// The old validate-then-revoke flow had a race: two concurrent requests with
+// the same token could both pass the validity check and both rotate. Now the
+// revocation IS the check (single conditional UPDATE), and reusing a revoked
+// token revokes the whole token family (kill-switch for stolen tokens).
 func (s *Service) Refresh(ctx context.Context, refreshTokenStr string) (*token.TokenPair, error) {
 	claims, err := token.ParseAndValidateToken(refreshTokenStr, s.cfg.JWTRefreshSecret, "refresh")
 	if err != nil {
@@ -151,13 +157,22 @@ func (s *Service) Refresh(ctx context.Context, refreshTokenStr string) (*token.T
 	}
 
 	tokenHash := token.HashToken(refreshTokenStr)
-	valid, err := s.playerRepo.IsRefreshTokenValid(ctx, claims.ID, tokenHash)
-	if err != nil || !valid {
+
+	// Atomically revoke-if-valid. RowsAffected==0 means: unknown token,
+	// already revoked (reuse!), or expired.
+	rotated, err := s.playerRepo.RotateRefreshToken(ctx, claims.ID, tokenHash)
+	if err != nil {
 		return nil, token.ErrInvalidToken
 	}
-
-	// Revoke old refresh token (rotation)
-	_ = s.playerRepo.RevokeRefreshTokenByJTI(ctx, claims.ID)
+	if !rotated {
+		// Reuse of a revoked/invalidated token — treat as compromise and
+		// revoke every token of this player.
+		if pID, parseErr := uuid.Parse(claims.PlayerID); parseErr == nil {
+			_ = s.playerRepo.RevokeAllPlayerRefreshTokens(ctx, pID)
+			logger.Log.Warn("refresh token reuse detected — all player tokens revoked", "player_id", claims.PlayerID, "jti", claims.ID)
+		}
+		return nil, token.ErrInvalidToken
+	}
 
 	playerID, err := uuid.Parse(claims.PlayerID)
 	if err != nil {
@@ -192,6 +207,27 @@ func (s *Service) Logout(ctx context.Context, refreshTokenStr string) error {
 	return s.playerRepo.RevokeRefreshTokenByJTI(ctx, claims.ID)
 }
 
+// ClientIP extracts the client IP for rate limiting. X-Forwarded-For is only
+// honored when TRUST_PROXY_HEADERS is explicitly enabled; otherwise the
+// direct peer address is used. Blindly trusting XFF let attackers rotate fake
+// IPs to bypass the per-IP limit and spam email sends.
+func ClientIP(r *http.Request, trustProxy bool) string {
+	if trustProxy {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			return strings.TrimSpace(parts[0])
+		}
+		if xri := r.Header.Get("X-Real-Ip"); xri != "" {
+			return strings.TrimSpace(xri)
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
 // HTTP Handler
 type Handler struct {
 	authSvc    *Service
@@ -214,10 +250,7 @@ func (h *Handler) RequestCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientIP := r.RemoteAddr
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		clientIP = strings.Split(xff, ",")[0]
-	}
+	clientIP := ClientIP(r, h.authSvc.cfg.TrustProxyHeaders)
 
 	err := h.authSvc.RequestCode(r.Context(), body.Email, clientIP)
 	if err != nil {
@@ -271,7 +304,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 
 	tokens, err := h.authSvc.Refresh(r.Context(), body.RefreshToken)
 	if err != nil {
-		respondError(w, http.StatusUnauthorized, "INVALID_TOKEN", err.Error())
+		respondError(w, http.StatusUnauthorized, "INVALID_TOKEN", "Refresh token is invalid or expired")
 		return
 	}
 

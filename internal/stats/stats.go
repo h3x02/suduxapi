@@ -8,7 +8,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/h3x02/suduxapi/internal/middleware"
 	"github.com/h3x02/suduxapi/internal/postgres"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+// execer is satisfied by both pgx.Tx and *pgxpool.Pool.
+type execer interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}
 
 type PlayerStats struct {
 	ID               uuid.UUID `json:"id"`
@@ -32,7 +39,18 @@ func NewRepository(db *postgres.DB) *Repository {
 	return &Repository{db: db}
 }
 
+// UpdatePlayerStatsTx runs the stats upsert inside the caller's transaction so
+// match results and stats commit atomically. Both *pgxpool.Pool and pgx.Tx
+// satisfy the pgx.Tx interface for Exec purposes.
+func UpdatePlayerStatsTx(ctx context.Context, tx pgx.Tx, playerID uuid.UUID, gameModeID, matchFormatID int, isWin, isLoss bool, score, solvedCells int) error {
+	return upsertPlayerStats(ctx, tx, playerID, gameModeID, matchFormatID, isWin, isLoss, score, solvedCells)
+}
+
 func (r *Repository) UpdatePlayerStats(ctx context.Context, playerID uuid.UUID, gameModeID, matchFormatID int, isWin, isLoss bool, score, solvedCells int) error {
+	return upsertPlayerStats(ctx, r.db.Pool, playerID, gameModeID, matchFormatID, isWin, isLoss, score, solvedCells)
+}
+
+func upsertPlayerStats(ctx context.Context, db execer, playerID uuid.UUID, gameModeID, matchFormatID int, isWin, isLoss bool, score, solvedCells int) error {
 	winInc := 0
 	lossInc := 0
 	drawInc := 0
@@ -57,7 +75,7 @@ func (r *Repository) UpdatePlayerStats(ctx context.Context, playerID uuid.UUID, 
 			total_solved_cells = stats.total_solved_cells + EXCLUDED.total_solved_cells,
 			updated_at = CURRENT_TIMESTAMP
 	`
-	_, err := r.db.Pool.Exec(ctx, query, playerID, gameModeID, matchFormatID, winInc, lossInc, drawInc, score, solvedCells)
+	_, err := db.Exec(ctx, query, playerID, gameModeID, matchFormatID, winInc, lossInc, drawInc, score, solvedCells)
 	return err
 }
 
@@ -76,7 +94,7 @@ func (r *Repository) GetPlayerStats(ctx context.Context, playerID uuid.UUID) ([]
 			list = append(list, &s)
 		}
 	}
-	return list, nil
+	return list, rows.Err()
 }
 
 type Handler struct {

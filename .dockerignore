@@ -1,0 +1,11 @@
+# Build context hygiene: keep secrets and VCS history out of images.
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+.freebuff/
+.kilo/
+docs/
+*.md
+docker-compose.yml

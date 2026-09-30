@@ -1,6 +1,13 @@
 # Sudux Real-Time WebSocket Protocol
 
-WebSocket Endpoint: `ws://<host>:8081/ws?token=<JWT_ACCESS_TOKEN>`
+WebSocket Endpoint: `ws://<host>:8081/ws`
+
+Authentication: send the access JWT in the `Authorization: Bearer <token>`
+header when opening the socket (Godot supports custom headers on
+WebSocketPeer requests). `?token=<JWT>` is still accepted for backwards
+compatibility, but the header is preferred since URLs end up in access logs.
+On failure the server upgrades, sends one `error` message (`UNAUTHORIZED` or
+`TOKEN_EXPIRED`) and closes the connection.
 
 ## Protocol Envelope
 All WebSocket messages use a standard JSON envelope:
@@ -44,6 +51,15 @@ Submits a cell value choice for validation.
 }
 ```
 
+Move throttling: a player must wait at least `MOVE_MIN_INTERVAL` (default
+250ms) between moves, and `WRONG_MOVE_COOLDOWN` (default 2s) after a wrong
+answer. Wrong answers subtract `WRONG_MOVE_PENALTY` points (default 50, score
+floors at 0) and reset the combo. Errors: `MOVE_FAILED` with the reason
+("moving too fast", "wrong answer cooldown active", "duplicate request_id",
+"cell already solved", ...).
+
+### 3. `ping`
+Optional app-level keepalive; the server replies with `pong`.
 ---
 
 ## Server Events
@@ -103,3 +119,25 @@ Sent when a command fails validation or processing.
   }
 }
 ```
+
+Common codes: `UNAUTHORIZED`, `TOKEN_EXPIRED`, `FORBIDDEN` (not a participant
+in this match), `NOT_SYNCED` (send `game.sync` first), `ROOM_NOT_FOUND`,
+`MATCH_NOT_ACTIVE`, `MOVE_FAILED`.
+
+### 4. `game.finished`
+Broadcast to all participants when the match ends (puzzle complete, deadline
+expired, or abandoned). `payload.state` carries the final `game.state`-shaped
+snapshot.
+
+```json
+{
+  "type": "game.finished",
+  "payload": {
+    "match_id": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+    "reason": "puzzle_complete",
+    "winners": "team-uuid-1",
+    "state": { }
+  }
+}
+```
+

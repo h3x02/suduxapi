@@ -31,33 +31,40 @@ func NewGenerator() *Generator {
 	}
 }
 
-// Generate creates a Sudoku puzzle with given difficulty
+// Generate creates a Sudoku puzzle with the given difficulty that is guaranteed
+// to have exactly one solution. Clues are removed one by one and each removal is
+// verified against a solution counter; removals that create a second solution are
+// rolled back. If the target clue count is not reachable while keeping the puzzle
+// unique (common for expert), the loop stops at the first difficulty level that
+// fails and returns the unique puzzle with the fewest clues achieved.
 func (g *Generator) Generate(diff Difficulty) (*Puzzle, error) {
 	var solution [81]int
 	if !g.fillGrid(&solution) {
 		return nil, errors.New("failed to generate solved sudoku grid")
 	}
 
+	cluesToKeep := cluesForDifficulty(diff)
+
 	board := solution
-	var cluesToKeep int
-	switch diff {
-	case DifficultyEasy:
-		cluesToKeep = 42
-	case DifficultyMedium:
-		cluesToKeep = 34
-	case DifficultyHard:
-		cluesToKeep = 28
-	case DifficultyExpert:
-		cluesToKeep = 24
-	default:
-		cluesToKeep = 34
-	}
+	remaining := 81
 
-	indices := g.rng.Perm(81)
-	toRemove := 81 - cluesToKeep
+	for _, idx := range g.rng.Perm(81) {
+		if remaining <= cluesToKeep {
+			break
+		}
+		if board[idx] == 0 {
+			continue
+		}
 
-	for i := 0; i < toRemove; i++ {
-		board[indices[i]] = 0
+		removed := board[idx]
+		board[idx] = 0
+
+		// Keep the removal only if the puzzle still has exactly one solution.
+		if g.countSolutions(&board, 2) != 1 {
+			board[idx] = removed
+		} else {
+			remaining--
+		}
 	}
 
 	return &Puzzle{
@@ -67,11 +74,86 @@ func (g *Generator) Generate(diff Difficulty) (*Puzzle, error) {
 	}, nil
 }
 
+func cluesForDifficulty(diff Difficulty) int {
+	switch diff {
+	case DifficultyEasy:
+		return 42
+	case DifficultyMedium:
+		return 34
+	case DifficultyHard:
+		return 28
+	case DifficultyExpert:
+		return 24
+	default:
+		return 34
+	}
+}
+
+// CountSolutionsForTest exposes the solution counter for tests.
+func (g *Generator) CountSolutionsForTest(grid *[81]int, limit int) int {
+	return g.countSolutions(grid, limit)
+}
+
+// countSolutions counts up to `limit` solutions of the given grid (0 = empty).
+// It stops as soon as `limit` solutions are found. The branch cell is chosen
+// with the MRV heuristic (fewest candidates first), which keeps counting fast
+// even on sparse expert puzzles where a naive first-empty-cell search explodes
+// combinatorially.
+func (g *Generator) countSolutions(grid *[81]int, limit int) int {
+	if limit <= 0 {
+		return 0
+	}
+
+	best := -1
+	bestCandidates := make([]int, 0, 9)
+	var candidates [9]int
+
+	for i := 0; i < 81; i++ {
+		if grid[i] != 0 {
+			continue
+		}
+		n := 0
+		for _, v := range g.rng.Perm(9) {
+			val := v + 1
+			if isValidPlacement(grid, i, val) {
+				candidates[n] = val
+				n++
+			}
+		}
+		if n == 0 {
+			return 0 // dead end: some empty cell has no candidates
+		}
+		if best == -1 || n < len(bestCandidates) {
+			best = i
+			bestCandidates = bestCandidates[:0]
+			bestCandidates = append(bestCandidates, candidates[:n]...)
+			if n == 1 {
+				break // cannot do better than a forced cell
+			}
+		}
+	}
+
+	if best == -1 {
+		return 1 // no empty cells: this grid is a solution
+	}
+
+	count := 0
+	for _, val := range bestCandidates {
+		grid[best] = val
+		count += g.countSolutions(grid, limit-count)
+		grid[best] = 0
+		if count >= limit {
+			return count
+		}
+	}
+	return count
+}
+
 func (g *Generator) fillGrid(grid *[81]int) bool {
 	emptyIdx := -1
 	for i := 0; i < 81; i++ {
 		if grid[i] == 0 {
-			emptyIdx = i;
+			emptyIdx = i
 			break
 		}
 	}
