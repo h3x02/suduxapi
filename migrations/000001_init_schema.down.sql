@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS stats;
+ALTER TABLE matches DROP CONSTRAINT IF EXISTS fk_matches_winning_team;
+DROP TABLE IF EXISTS match_participants;
+DROP TABLE IF EXISTS match_teams;
+DROP TABLE IF EXISTS matches;
+DROP TABLE IF EXISTS friendships;
+DROP TABLE IF EXISTS refresh_tokens;
+DROP TABLE IF EXISTS players;
+DROP TABLE IF EXISTS match_formats;
+DROP TABLE IF EXISTS game_modes;

@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sudux-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: sudux
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sudux"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: sudux-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: sudux-api
+    environment:
+      APP_ENV: development
+      APP_PORT: 8080
+      DATABASE_URL: postgres://postgres:postgrespassword@postgres:5432/sudux?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      JWT_ACCESS_SECRET: dev-access-secret
+      JWT_REFRESH_SECRET: dev-refresh-secret
+      RESEND_API_KEY: re_xxxxxxxxx
+      RESEND_FROM_EMAIL: onboarding@resend.dev
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  matchmaker:
+    build:
+      context: .
+      dockerfile: Dockerfile.matchmaker
+    container_name: sudux-matchmaker
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgres://postgres:postgrespassword@postgres:5432/sudux?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  game-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.game-server
+    container_name: sudux-game-server
+    environment:
+      APP_ENV: development
+      APP_PORT: 8081
+      DATABASE_URL: postgres://postgres:postgrespassword@postgres:5432/sudux?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      JWT_ACCESS_SECRET: dev-access-secret
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

@@ -1,0 +1,176 @@
+openapi: 3.0.3
+info:
+  title: Sudux API
+  description: Real-time multiplayer Sudoku backend API specification.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+    description: Local Development Server
+
+paths:
+  /auth/request-code:
+    post:
+      summary: Request passwordless email verification code
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Verification code sent if email is valid
+
+  /auth/verify-code:
+    post:
+      summary: Verify code and login/register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code]
+              properties:
+                email:
+                  type: string
+                code:
+                  type: string
+      responses:
+        '200':
+          description: Authenticated successfully with access and refresh tokens
+
+  /auth/refresh:
+    post:
+      summary: Refresh access token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token:
+                  type: string
+      responses:
+        '200':
+          description: New token pair issued
+
+  /auth/logout:
+    post:
+      summary: Revoke refresh token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token:
+                  type: string
+      responses:
+        '200':
+          description: Logged out successfully
+
+  /me:
+    get:
+      summary: Get current player profile
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Player profile data
+    patch:
+      summary: Update player display name
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+      responses:
+        '200':
+          description: Updated player profile
+
+  /friends:
+    get:
+      summary: Get friend list
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of accepted friends
+
+  /friends/requests:
+    post:
+      summary: Send friend request
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [addressee_id]
+              properties:
+                addressee_id:
+                  type: string
+                  format: uuid
+      responses:
+        '201':
+          description: Request created
+
+  /matchmaking/join:
+    post:
+      summary: Join matchmaking queue or create instant bot match
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                game_mode:
+                  type: string
+                  example: cell_race
+                match_format:
+                  type: string
+                  example: 1v1
+                difficulty:
+                  type: string
+                  example: medium
+                bot_difficulty:
+                  type: string
+                  example: noob
+                with_teammate:
+                  type: boolean
+                friend_id:
+                  type: string
+      responses:
+        '200':
+          description: Instantly matched
+        '202':
+          description: Added to queue
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
