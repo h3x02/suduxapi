@@ -145,16 +145,10 @@ func popValidPlayer(ctx context.Context, rdb *redis.Client, queueKey string) (st
 		default:
 		}
 
-		pID, err := rdb.BLPop(ctx, 0, queueKey).Result()
-		if err != nil {
+		playerID, err := rdb.LPop(ctx, queueKey).Result()
+		if err != nil || playerID == "" {
 			return "", false
 		}
-		// BLPop returns [key, value]; popValidPlayer is only used with a
-		// single key so value is index 1.
-		if len(pID) < 2 || pID[1] == "" {
-			return "", false
-		}
-		playerID := pID[1]
 
 		// Re-validate queue membership after pop.
 		exists, err := rdb.Exists(ctx, fmt.Sprintf("matchmaking:player:%s", playerID)).Result()
